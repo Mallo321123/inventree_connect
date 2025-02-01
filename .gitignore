@@ -1,0 +1,10 @@
+cache
+cache*/
+.env
+logs
+logs/*
+.mypy_cache
+.mypy_cache/*
+__pycache__
+__pycache__/*
+auth.json
