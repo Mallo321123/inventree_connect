@@ -5,6 +5,9 @@ import datetime
 import json
 import time
 
+from log_config import setup_logging
+logging = setup_logging()
+
 # Authenticates against Shopware and saves the token in a file
 def shopware_auth():
     load_dotenv()
@@ -28,7 +31,7 @@ def shopware_auth():
         )
 
         if auth_response.status_code != 200:
-            print(f"Error response body: {auth_response.text}")
+            logging.error(f"Error response body: {auth_response.text}")
             return None
 
         auth_response.raise_for_status()
@@ -56,11 +59,14 @@ def shopware_auth():
                 json.dump(existing_data, f)
 
     except requests.exceptions.Timeout:
-        print("Request timed out after 10 seconds")
+        logging.error("Request timed out after 10 seconds")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"Authentication failed: {e}")
-        print(f"Error details: {str(e)}")
+        logging.error(f"Authentication failed: {e}")
+        logging.error(f"Error details: {str(e)}")
+        return None
+    except Exception as e:
+        logging.error(f"Error: {e}")
         return None
 
 # Authenticates against Inventree and saves the token in a file
@@ -79,7 +85,7 @@ def inventree_auth():
         )
 
         if auth_response.status_code != 200:
-            print(f"Error response body: {auth_response.text}")
+            logging.error(f"Error response body: {auth_response.text}")
             return None
 
         auth_response.raise_for_status()
@@ -107,11 +113,14 @@ def inventree_auth():
                 json.dump(existing_data, f)
 
     except requests.exceptions.Timeout:
-        print("Request timed out after 10 seconds")
+        logging.error("Request timed out after 10 seconds")
         return None
     except requests.exceptions.RequestException as e:
-        print(f"Authentication failed: {e}")
-        print(f"Error details: {str(e)}")
+        logging.error(f"Authentication failed: {e}")
+        logging.error(f"Error details: {str(e)}")
+        return None
+    except Exception as e:
+        logging.error(f"Error: {e}")
         return None
 
 # Checks if the shopware token is still valid
@@ -123,7 +132,8 @@ def check_shopware_token():
         data = json.load(f)
     
     if "shopware_token" in data and "shopware_expires" in data:
-        if data["shopware_expires"] > datetime.datetime.now().timestamp():
+        # Add 15 seconds buffer before expiration
+        if data["shopware_expires"] > (datetime.datetime.now() + datetime.timedelta(seconds=25)).timestamp():
             return True
     
     return False
@@ -143,13 +153,29 @@ def check_inventree_token():
     
     return False
 
+def check_tokens():
+    if not check_shopware_token():
+        logging.info("Shopware token invalid, refreshing")
+        shopware_auth()
+        logging.info("Shopware token refreshed")
+            
+    if not check_inventree_token():
+        logging.info("Inventree token invalid, refreshing")
+        inventree_auth()
+        logging.info("Inventree token refreshed")
+
 # Checks all tokens every second if they are still valid
-def auth_job():    
+def auth_job():  
+    logging.debug("Starting authentication job")  
     while True:        
         if not check_shopware_token():
+            logging.info("Shopware token invalid, refreshing")
             shopware_auth()
+            logging.info("Shopware token refreshed")
             
         if not check_inventree_token():
+            logging.info("Inventree token invalid, refreshing")
             inventree_auth()
+            logging.info("Inventree token refreshed")
             
         time.sleep(1)
