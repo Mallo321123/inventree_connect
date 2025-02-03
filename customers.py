@@ -13,29 +13,25 @@ logging = setup_logging()
 
 def update_customers():
     logging.info("Updating customers in db")
-    inventree_thread = threading.Thread(target=update_customers_inventree)
     shopware_thread = threading.Thread(target=update_customers_shopware)
-    
-    inventree_valid_thread = threading.Thread(target=valid_inventree_users)
+
     shopware_valid_thread = threading.Thread(target=valid_shopware_users)
-    
+
     sync_thread = threading.Thread(target=sync_inventree)
 
-    #inventree_thread.start()
-    #shopware_thread.start()
-    #inventree_thread.join()
-    #shopware_thread.join()
-    #logging.info("Database updated")
-    
-    #inventree_valid_thread.start()
-    #shopware_valid_thread.start()
-    #inventree_valid_thread.join()
-    #shopware_valid_thread.join()
-    #logging.info("Database verified")
-    
+    shopware_thread.start()
+    shopware_thread.join()
+    logging.info("Database updated")
+
+    # inventree_valid_thread.start()
+    # shopware_valid_thread.start()
+    # inventree_valid_thread.join()
+    # shopware_valid_thread.join()
+    # logging.info("Database verified")
+
     sync_thread.start()
     sync_thread.join()
-    
+
     logging.info("Customers updated")
 
 
@@ -106,9 +102,9 @@ def update_customers_shopware():
         for customer in customers_data:
             cursor.execute(
                 """
-                           SELECT * FROM customers WHERE email = ?
+                           SELECT * FROM customers WHERE shopware_id = ?
                            """,
-                (customer["email"],),
+                (customer["id"],),
             )
 
             result = cursor.fetchone()
@@ -127,9 +123,6 @@ def update_customers_shopware():
                         customer["email"],
                     ),
                 )
-                logging.debug(
-                    f"Kunde {customer['firstName']} {customer['lastName']} aus Shopware hinzugefügt"
-                )
 
                 count_update += 1
 
@@ -137,8 +130,8 @@ def update_customers_shopware():
                 cursor.execute(
                     """
                     UPDATE customers 
-                    SET shopware_id = ?, is_in_shopware = ?, firstName = ?, lastName = ? 
-                    WHERE email = ?
+                    SET shopware_id = ?, is_in_shopware = ?, firstName = ?, lastName = ?, email = ?
+                    WHERE shopware_id = ?
                 """,
                     (
                         customer["id"],
@@ -146,6 +139,7 @@ def update_customers_shopware():
                         customer["firstName"],
                         customer["lastName"],
                         customer["email"],
+                        customer["id"],
                     ),
                 )
 
@@ -166,152 +160,6 @@ def update_customers_shopware():
 
     logging.info(
         f"Neue Shopware Kunden erfolgreich in die Datenbank geschrieben: {count_update} Kunden, insgesamt {counter} Kunden"
-    )
-
-
-# Update customers in db from Inventree
-def update_customers_inventree():
-    load_dotenv()
-
-    base_url = os.getenv("INVENTREE_URL")
-
-    limit = 500
-    page = 0
-    counter = 0
-    counter_update = 0
-
-    logging.info("Updating customer db from Inventree")
-
-    def request(page, limit):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/company/?limit={limit}&offset={page * limit}&is_customer=true,active=true",
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen der Inventree Kunden: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return
-
-            customers_data = response.json()
-
-            logging.debug("Inventree Kunden erfolgreich abgerufen")
-
-            return customers_data["results"], len(customers_data["results"])
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen der Inventree Kunden liste")
-            return
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen der Inventree Kunden: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
-    while True:
-        customers_data, data_count = request(page, limit)
-
-        if customers_data is None:
-            break
-
-        conn, cursor = get_db()
-
-        for customer in customers_data:
-            cursor.execute(
-                """
-                           SELECT * FROM customers WHERE inventree_id = ?
-                           """,
-                (customer["pk"],),
-            )
-
-            result = cursor.fetchone()
-
-            if result is None:
-                cursor.execute(
-                    """
-                    SELECT * FROM customers 
-                    WHERE email = ? 
-                """,
-                    (customer["email"],),
-                )
-                company = cursor.fetchone()
-
-                if company is None:
-                    cursor.execute(
-                        """ INSERT INTO customers (inventree_id, is_in_inventree, email) VALUES (?, ?, ?) """,
-                        (
-                            customer["pk"],
-                            True,
-                            customer["email"],
-                        ),
-                    )
-
-                    logging.debug(f"Kunde {customer['name']} aus Inventree hinzugefügt")
-
-                    counter_update += 1
-
-                else:
-                    cursor.execute(
-                        """
-                        UPDATE customers 
-                        SET is_in_inventree = ?, inventree_id = ? 
-                        WHERE email = ? 
-                    """,
-                        (True, customer["pk"], customer["email"]),
-                    )
-
-                    logging.debug(
-                        f"Kunde {customer['name']} aus inventree aktualisiert"
-                    )
-
-                    counter_update += 1
-                    
-            else:
-                cursor.execute(
-                    """
-                    UPDATE customers 
-                    SET is_in_inventree = ?, inventree_id = ? 
-                    WHERE email = ? 
-                """,
-                    (True, customer["pk"], customer["email"]),
-                )
-
-                logging.debug(
-                    f"Kunde {customer['name']} aus Inventree aktualisiert"
-                )
-
-                counter_update += 1
-
-            counter += 1
-
-        conn.commit()
-        close_db(conn)
-
-        if data_count < limit:
-            break
-
-        page += 1
-
-    logging.info(
-        f"Neue Inventree Kunden erfolgreich in die Datenbank geschrieben: {counter_update} Kunden, insgesamt {counter} Kunden"
     )
 
 
@@ -459,19 +307,18 @@ def valid_inventree_users():
 
     logging.info("Inventree Kunden erfolgreich aktualisiert")
     close_db(conn)
-    
-    
+
+
 # Sync customers from db to Inventree
 def sync_inventree():
     load_dotenv()
-    
+
     base_url = os.getenv("INVENTREE_URL")
-    
+
     counter = 0
-    
+
     def request(data):
         try:
-            
             # Token bei jedem Request neu einlesen
             with open("auth.json", "r") as f:
                 auth_data = json.load(f)
@@ -483,19 +330,19 @@ def sync_inventree():
                 "Authorization": f"Token {access_token}",
                 "Content-Type": "application/json",
             }
-            
+
             response = requests.post(
                 f"{base_url}/api/company/",
                 json=data,
                 timeout=10,
                 headers=headers,
             )
-        
+
             if response.status_code != 201:
                 logging.error(f"fehler beim erstellen dieses kunden: {data}")
                 logging.error(f"Error response body: {response.text}")
                 return
-            
+
             return response.json()
 
         except requests.exceptions.Timeout:
@@ -509,17 +356,19 @@ def sync_inventree():
         except Exception as e:
             logging.error(f"Error: {e}")
             return None
-        
+
     conn, cursor = get_db()
-    
-    cursor.execute("SELECT firstName, lastName, email FROM customers WHERE is_in_inventree = 0 OR is_in_inventree IS NULL")
-    
+
+    cursor.execute(
+        "SELECT firstName, lastName, email, id FROM customers WHERE is_in_inventree = 0 OR is_in_inventree IS NULL"
+    )
+
     customers = cursor.fetchall()
-    
+
     for customer in customers:
         if customer[0] is None or customer[1] is None or customer[2] is None:
             continue
-        
+
         data = {
             "is_customer": True,
             "name": customer[0] + " " + customer[1],
@@ -532,20 +381,23 @@ def sync_inventree():
             "is_manufacturer": False,
             "active": True,
         }
-        
+
         response = request(data)
-        
+
         if response is None:
-            logging.error(f"Kunde {customer[2]} {customer[1]} konnte nicht in Inventree erstellt werden")
+            logging.error(
+                f"Kunde {customer[0]} {customer[1]} konnte nicht in Inventree erstellt werden"
+            )
             continue
-        
-        cursor.execute("UPDATE customers SET inventree_id = ?, is_in_inventree = ? WHERE email = ?", (response["pk"], True, customer[2]))
-        
-        logging.debug(f"Kunde {customer[0]} {customer[1]} erfolgreich in Inventree erstellt")
+
+        cursor.execute(
+            "UPDATE customers SET inventree_id = ?, is_in_inventree = ? WHERE id = ?",
+            (response["pk"], True, customer[3]),
+        )
+
 
         conn.commit()
         counter += 1
-    
+
     logging.info(f"{counter} Kunden erfolgreich in Inventree erstellt")
     close_db(conn)
-
