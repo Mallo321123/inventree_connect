@@ -30,7 +30,8 @@ def create_tables():
             is_in_shopware BOOLEAN,
             firstName TEXT,
             lastName TEXT,
-            email TEXT
+            email TEXT,
+            updated BOOLEAN
         )
     """)
 
@@ -79,7 +80,8 @@ def create_tables():
             lastName TEXT,
             zipcode TEXT,
             city TEXT,
-            street TEXT
+            street TEXT,
+            updated BOOLEAN
         )
     """)
 

@@ -26,7 +26,7 @@ if __name__ == "__main__":
     customers_thread = threading.Thread(target=update_customers)
     address_thread = threading.Thread(target=update_addresses)
     
-    customers_thread.start()
+    #customers_thread.start()
     address_thread.start()
 
     exit()
