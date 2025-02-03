@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 import os
 import requests
 import json
-import threading
 
 from db import get_db, close_db
 from log_config import setup_logging
@@ -13,17 +12,8 @@ logging = setup_logging()
 def update_addresses():
     logging.info("Starte Adressen Update")
 
-    address_thread = threading.Thread(target=update_addresses_shopware)
-    sync_thread = threading.Thread(target=sync_inventree)
-
-    address_thread.start()
-    # sync_thread.start()
-
-    # sync_thread.join()
-    address_thread.join()
-
-    # update_addresses_shopware()
-    # sync_inventree()
+    #update_addresses_shopware()
+    sync_inventree()
 
     logging.info("Adressen Update abgeschlossen")
 
@@ -32,7 +22,7 @@ def update_addresses_shopware():
     load_dotenv()
     base_url = os.getenv("SHOPWARE_URL")
 
-    limit = 100
+    limit = 500
     page = 1
     counter_addr = 0
     counter_customer = 0
@@ -252,26 +242,39 @@ def sync_inventree():
         customer_id = cursor.fetchone()[0]
 
         if customer_id is None:
-            logging.error(f"Kunde mit ID {address[1]} konnte nicht gefunden werden")
+            cursor.execute("""SELECT * FROM customers WHERE id = ?""", (address[1],))
+            
+            customer = cursor.fetchone()
+            
+            if customer is None:
+                logging.error(f"Kunde {address[1]} nicht in der Datenbank gefunden")
+                
+            else:
+                logging.warning(f"Kunde {customer[1]} Existiert nicht in Inventree, aber in der Datenbank")
+            
             continue
 
         data = {
             "company": customer_id,
             "title": address[0],
-            "line1": address[2] + " " + address[3],
-            "line2": address[6],
-            "postal_code": address[4],
+            "line1": (address[2] + " " + address[3])[:50],
+            "line2": address[6][:50],
+            "postal_code": address[4][:10],
             "postal_city": address[5],
         }
 
         response = request(data)
 
-        cursor.execute(
-            """
-                       UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
-                          """,
-            (response["pk"], address[0]),
-        )
+        try:
+            cursor.execute(
+                """
+                        UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
+                            """,
+                (response["pk"], address[0]),
+            )
+        except TypeError:
+            logging.error(f"Adresse {address[0]} konnte nicht in Inventree erstellt werden")
+            continue
 
         conn.commit()
 

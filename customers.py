@@ -14,23 +14,22 @@ def update_customers():
     logging.info("Updating customers in db")
     update_customers_shopware()
 
-    # valid_shopware_users()
-
     sync_inventree()
 
     logging.info("Customers updated")
 
-
-# Update customers in db from Shopware
+# Check if customers in db are still in Shopware, and update them if needed
 def update_customers_shopware():
     load_dotenv()
+
     base_url = os.getenv("SHOPWARE_URL")
 
     limit = 500
     page = 1
     counter = 0
-    count_update = 0
-
+    counter_new = 0
+    counter_updated = 0
+    
     logging.info("Updating customer db from Shopware")
 
     def request(page, limit):
@@ -75,29 +74,33 @@ def update_customers_shopware():
             logging.error(f"Error: {e}")
             return None
 
+    conn, cursor = get_db()
+
+    # Reset all updated flags
+    cursor.execute("UPDATE addresses SET updated = 0")
+    conn.commit()
+
     while True:
-        customers_data, data_count = request(page, limit)
+        customers_data, data_count = request(page, limit)   # Request a page of customers
 
         if customers_data is None:
             break
 
-        conn, cursor = get_db()
-
-        for customer in customers_data:
+        for customer in customers_data:  # For each customer in the page
             cursor.execute(
                 """
                            SELECT * FROM customers WHERE shopware_id = ?
                            """,
                 (customer["id"],),
-            )
+            )   # Check if the customer is in the database
 
             result = cursor.fetchone()
 
             if result is None:
                 cursor.execute(
                     """
-                                 INSERT INTO customers (shopware_id, is_in_shopware, firstName, lastName, email)
-                                 VALUES (?, ?, ?, ?, ?)
+                                 INSERT INTO customers (shopware_id, is_in_shopware, firstName, lastName, email, updated)
+                                 VALUES (?, ?, ?, ?, ?, ?)
                                  """,
                     (
                         customer["id"],
@@ -105,20 +108,19 @@ def update_customers_shopware():
                         customer["firstName"],
                         customer["lastName"],
                         customer["email"],
+                        True,
                     ),
                 )
-
-                count_update += 1
+                counter_new += 1
 
             else:
                 cursor.execute(
                     """
-                    UPDATE customers 
-                    SET shopware_id = ?, is_in_shopware = ?, firstName = ?, lastName = ?, email = ?
-                    WHERE shopware_id = ?
-                """,
+                               UPDATE customers SET is_in_shopware = ?, updated = ?, firstName = ?, lastName = ?, email = ?
+                               WHERE shopware_id = ?
+                               """,
                     (
-                        customer["id"],
+                        True,
                         True,
                         customer["firstName"],
                         customer["lastName"],
@@ -126,169 +128,26 @@ def update_customers_shopware():
                         customer["id"],
                     ),
                 )
-
-                count_update += 1
+                counter_updated += 1
 
             counter += 1
 
         conn.commit()
-        close_db(conn)
 
         if data_count < limit:
             break
 
         page += 1
+        
+    # Set all customers that are not updated to not in shopware
+    cursor.execute("""
+        UPDATE customers SET is_in_shopware = 0 
+        WHERE updated = 0 OR updated IS NULL
+    """)
+    conn.commit()
 
-    logging.info(
-        f"Neue Shopware Kunden erfolgreich in die Datenbank geschrieben: {count_update} Kunden, insgesamt {counter} Kunden"
-    )
-
-
-# Check if customers in db are still in Shopware, and update them if needed
-def valid_shopware_users():
-    load_dotenv()
-
-    base_url = os.getenv("SHOPWARE_URL")
-
-    def request(id):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["shopware_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/customer/{id}",
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code == 404:
-                return response.status_code
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen des Shopware Kunden: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return None
-
-            customer_data = response.json()
-            logging.debug(f"Shopware Kunde {id} erfolgreich abgerufen")
-            return customer_data["data"]
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen des Shopware Kunden")
-            return None
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen des Shopware Kunden: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
-    conn, cursor = get_db()
-
-    cursor.execute("SELECT shopware_id FROM customers WHERE is_in_shopware = 1")
-
-    customers = cursor.fetchall()
-
-    for customer in customers:
-        customer_data = request(customer[0])
-
-        if customer_data == 404:
-            cursor.execute(
-                "UPDATE customers SET is_in_shopware = ? WHERE shopware_id = ?",
-                (False, customer[0]),
-            )
-            logging.debug(f"Kunde {customer[0]} nicht mehr in Shopware vorhanden")
-
-        conn.commit()
-
-    logging.info("Shopware Kunden erfolgreich aktualisiert")
+    logging.info(f"{counter} Kunden verarbeiten, {counter_new} neu, {counter_updated} aktualisiert")
     close_db(conn)
-
-
-# Check if customers in db are still in Inventree
-def valid_inventree_users():
-    load_dotenv()
-
-    base_url = os.getenv("INVENTREE_URL")
-
-    def request(id):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/company/{id}/",
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code == 404:
-                return response.status_code
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen des Inventree Kunden: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return None
-
-            customer_data = response.json()
-            logging.debug(f"Inventree Kunde {id} erfolgreich abgerufen")
-            return customer_data
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen des Inventree Kunden")
-            return None
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen des Inventree Kunden: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
-    conn, cursor = get_db()
-
-    cursor.execute("SELECT inventree_id FROM customers WHERE is_in_inventree = 1")
-
-    customers = cursor.fetchall()
-
-    for customer in customers:
-        customer_data = request(customer[0])
-
-        if customer_data == 404:
-            cursor.execute(
-                "UPDATE customers SET is_in_inventree = ? WHERE inventree_id = ?",
-                (False, customer[0]),
-            )
-            logging.debug(f"Kunde {customer[0]} nicht mehr in Inventree vorhanden")
-
-        conn.commit()
-
-    logging.info("Inventree Kunden erfolgreich aktualisiert")
-    close_db(conn)
-
 
 # Sync customers from db to Inventree
 def sync_inventree():
