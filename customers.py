@@ -2,7 +2,6 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
-import threading
 
 from db import get_db, close_db
 
@@ -13,24 +12,11 @@ logging = setup_logging()
 
 def update_customers():
     logging.info("Updating customers in db")
-    shopware_thread = threading.Thread(target=update_customers_shopware)
+    update_customers_shopware()
 
-    shopware_valid_thread = threading.Thread(target=valid_shopware_users)
+    # valid_shopware_users()
 
-    sync_thread = threading.Thread(target=sync_inventree)
-
-    shopware_thread.start()
-    shopware_thread.join()
-    logging.info("Database updated")
-
-    # inventree_valid_thread.start()
-    # shopware_valid_thread.start()
-    # inventree_valid_thread.join()
-    # shopware_valid_thread.join()
-    # logging.info("Database verified")
-
-    sync_thread.start()
-    sync_thread.join()
+    sync_inventree()
 
     logging.info("Customers updated")
 
@@ -75,8 +61,6 @@ def update_customers_shopware():
                 return
 
             customers_data = response.json()
-
-            logging.debug("Shopware Kunden erfolgreich abgerufen")
 
             return customers_data["data"], customers_data["total"]
 
@@ -143,9 +127,6 @@ def update_customers_shopware():
                     ),
                 )
 
-                logging.debug(
-                    f"Kunde {customer['firstName']} {customer['lastName']} aus Shopware aktualisiert"
-                )
                 count_update += 1
 
             counter += 1
@@ -394,7 +375,6 @@ def sync_inventree():
             "UPDATE customers SET inventree_id = ?, is_in_inventree = ? WHERE id = ?",
             (response["pk"], True, customer[3]),
         )
-
 
         conn.commit()
         counter += 1

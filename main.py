@@ -1,16 +1,14 @@
 import threading
 import os
-import time
 
 
 from auth import auth_job, check_tokens
 from db import create_tables, close_db, get_db
 from customers import update_customers
+from addresses import update_addresses
 from log_config import setup_logging
+
 logging = setup_logging()
-
-
-from products import update_products, sync_inventree
 
 
 if __name__ == "__main__":
@@ -19,16 +17,16 @@ if __name__ == "__main__":
     else:
         create_tables()
         logging.info("Database file created")
-        
+
     check_tokens()
-    
+
     auth_thread = threading.Thread(target=auth_job)
     auth_thread.start()
     
-    #update_customers()
+    customers_thread = threading.Thread(target=update_customers)
+    address_thread = threading.Thread(target=update_addresses)
     
-    #update_products()
-    
-    sync_inventree()
-    
+    customers_thread.start()
+    address_thread.start()
+
     exit()

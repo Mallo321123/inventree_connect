@@ -1,22 +1,26 @@
 import sqlite3
 
 from log_config import setup_logging
+
 logging = setup_logging()
+
 
 # Function to get the database connection/cursor
 def get_db():
     conn = sqlite3.connect("database.db")
     return conn, conn.cursor()
 
+
 # Function to close the database connection
 def close_db(conn):
     conn.close()
-    
+
+
 # Function to create the database tables
 def create_tables():
     logging.info("Creating database tables")
     conn, cursor = get_db()
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +33,7 @@ def create_tables():
             email TEXT
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +53,7 @@ def create_tables():
             products TEXT
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +66,23 @@ def create_tables():
             active BOOLEAN
         )
     """)
-    
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS addresses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventree_id TEXT,
+            shopware_id TEXT,
+            is_in_inventree BOOLEAN,
+            is_in_shopware BOOLEAN,
+            customer_id INTEGER,
+            firstName TEXT,
+            lastName TEXT,
+            zipcode TEXT,
+            city TEXT,
+            street TEXT
+        )
+    """)
+
     conn.commit()
     logging.info("Database tables created")
     close_db(conn)
