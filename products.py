@@ -40,7 +40,7 @@ def update_products_shopware():
             }
 
             response = requests.get(
-                f"{base_url}/api/product?limit={limit}&page={page}",
+                f"{base_url}/api/product?limit={limit}&page={page}&associations[children][]",
                 headers=auth_headers,
                 timeout=10,  # 10 Sekunden Timeout
             )
@@ -75,10 +75,61 @@ def update_products_shopware():
         if products is None:
             break
 
-        for product in products:
+        for product in products:                
             if product["name"] is None:
-                logging.warning("Produkt hat keinen Namen")
+                logging.warning(f"Produkt hat keinen Namen, produktNumber: {product['productNumber']}")
                 continue
+                
+            if product["children"] is not None:
+                
+                for child in product["children"]:
+                    
+                    if child["name"] is None:
+                        logging.warning(f"Produkt hat keinen Namen, produktNumber: {child['productNumber']}")
+                        child["name"] = child["productNumber"]
+
+                    cursor.execute(
+                        """
+                        SELECT * FROM products WHERE shopware_id = ?
+                    """,
+                        (child["id"],),
+                    )
+
+                    if cursor.fetchone() is None:
+                        cursor.execute(
+                            """
+                            INSERT INTO products (shopware_id, name, description, is_in_shopware, active, productNumber)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                            (
+                                child["id"],
+                                child["name"],
+                                child["description"],
+                                True,
+                                child["active"],
+                                child["productNumber"],
+                            ),
+                        )
+                        count_update += 1
+                    else:
+                        cursor.execute(
+                            """
+                            UPDATE products
+                            SET name = ?, description = ?, active = ?, productNumber = ?
+                            WHERE shopware_id = ?
+                        """,
+                            (
+                                child["name"],
+                                child["description"],
+                                child["active"],
+                                child["productNumber"],
+                                child["id"],
+                            ),
+                        )
+                        count_update += 1
+
+                    counter += 1
+                    conn.commit()
 
             cursor.execute(
                 """
@@ -90,7 +141,7 @@ def update_products_shopware():
             if cursor.fetchone() is None:
                 cursor.execute(
                     """
-                    INSERT INTO products (shopware_id, name, description, is_in_shopware, active)
+                    INSERT INTO products (shopware_id, name, description, is_in_shopware, active, productNumber)
                     VALUES (?, ?, ?, ?, ?)
                 """,
                     (
@@ -99,26 +150,26 @@ def update_products_shopware():
                         product["description"],
                         True,
                         product["active"],
+                        product["productNumber"],
                     ),
                 )
                 count_update += 1
-                logging.debug(f"Produkt {product['name']} hinzugefügt")
             else:
                 cursor.execute(
                     """
                     UPDATE products
-                    SET name = ?, description = ?, active = ?
+                    SET name = ?, description = ?, active = ?, productNumber = ?
                     WHERE shopware_id = ?
                 """,
                     (
                         product["name"],
                         product["description"],
                         product["active"],
+                        product["productNumber"],
                         product["id"],
                     ),
                 )
                 count_update += 1
-                logging.debug(f"Produkt {product['name']} aktualisiert")
 
             counter += 1
             conn.commit()
@@ -276,11 +327,24 @@ def sync_inventree():
         product_desc = product_desc[:250]
 
         name = product[0][:100]
+        
+        try:
+            active = product[2]
+            
+            if active != 1 or active != 0:
+                active = 1
+                
+            else:
+                active = bool(active)
+                
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            active = 1
 
         data = {
             "name": name,
             "description": product_desc,
-            "active": bool(product[2]),
+            "active": bool(active),
             "minimum_stock": 10,  # Default Value
             "salable": True,
         }
@@ -297,7 +361,6 @@ def sync_inventree():
         )
 
         conn.commit()
-        logging.debug(f"Produkt {product[0]} in Inventree erstellt")
 
     close_db(conn)
     logging.info("Inventree Produkte synchronisiert")

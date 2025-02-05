@@ -282,3 +282,113 @@ def sync_inventree():
 
     logging.info(f"{counter} Adressen wurden hinzugefügt")
     close_db(conn)
+
+
+def create_address_db(data):
+    conn, cursor = get_db()
+
+    cursor.execute(
+        """
+        INSERT INTO addresses (inventree_id, shopware_id, is_in_inventree, is_in_shopware, customer_id, firstName, lastName, zipcode, city, street)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+        """,
+        (
+            data["inventree_id"],
+            data["shopware_id"],
+            bool(data["is_in_inventree"]),
+            bool(data["is_in_shopware"]),
+            data["customer_id"],
+            data["firstName"],
+            data["lastName"],
+            data["zipcode"],
+            data["city"],
+            data["street"],
+        ),
+    )
+    
+    id = cursor.fetchone()[0]
+    conn.commit()
+
+    return id
+
+def create_address_inventree(id):
+    load_dotenv()
+    base_url = os.getenv("INVENTREE_URL")    
+    
+
+    def request(data):
+        try:
+            # Token bei jedem Request neu einlesen
+            with open("auth.json", "r") as f:
+                auth_data = json.load(f)
+
+            access_token = auth_data["inventree_token"]
+
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Token {access_token}",
+                "Content-Type": "application/json",
+            }
+
+            response = requests.post(
+                f"{base_url}/api/company/address/",
+                json=data,
+                timeout=10,
+                headers=headers,
+            )
+
+            if response.status_code != 201:
+                logging.error(f"fehler beim erstellen dieser Adresse: {data}")
+                logging.error(f"Error response body: {response.text}")
+                return
+
+            return response.json()
+
+        except requests.exceptions.Timeout:
+            logging.error("Request timed out after 10 seconds")
+            return None
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"POST failed: {e}")
+            logging.error(f"Error details: {str(e)}")
+            return None
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            return None
+        
+    conn, cursor = get_db()
+    
+    cursor.execute(""" SELECT id, customer_id, firstName, lastName, zipcode, city, street FROM addresses WHERE id = ?""", (id,))#
+    address = cursor.fetchone()
+    
+    cursor.execute(""" SELECT inventree_id FROM customers WHERE id = ?""", (address[1],))
+    customer_id = cursor.fetchone()[0]
+    
+    data = {
+        "company": customer_id,
+        "title": address[0],
+        "line1": (address[2] + " " + address[3])[:50],
+        "line2": address[6][:50],
+        "postal_code": address[4][:10],
+        "postal_city": address[5],
+    }
+    
+    response = request(data)
+    
+    try: 
+        address_id = response["pk"]
+    except TypeError:
+        return None
+    
+    cursor.execute(
+        """
+        UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
+        """,
+        (address_id, id)
+    )
+    
+    conn.commit()
+    close_db(conn)
+    
+    return address_id

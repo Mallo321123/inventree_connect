@@ -64,7 +64,8 @@ def create_tables():
             is_in_shopware BOOLEAN,
             name TEXT,
             description TEXT,
-            active BOOLEAN
+            active BOOLEAN,
+            productNumber TEXT,
         )
     """)
 

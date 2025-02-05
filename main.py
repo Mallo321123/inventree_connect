@@ -7,6 +7,8 @@ from db import create_tables
 from customers import update_customers
 from addresses import update_addresses
 from log_config import setup_logging
+from orders import update_orders
+from products import update_products
 
 logging = setup_logging()
 
@@ -27,4 +29,10 @@ if __name__ == "__main__":
     address_thread = threading.Thread(target=update_addresses)
     
     #customers_thread.start()
-    address_thread.start()
+    #address_thread.start()
+    
+    #customers_thread.join()
+    
+    update_orders()
+    
+    #update_products()
