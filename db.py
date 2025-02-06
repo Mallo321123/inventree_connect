@@ -51,7 +51,8 @@ def create_tables():
             shipped BOOLEAN,
             shippment_number TEXT,
             state TEXT,
-            products TEXT
+            products TEXT,
+            inventree_state TEXT,
         )
     """)
 

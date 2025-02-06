@@ -37,7 +37,7 @@ def shopware_request(
         return None
 
     url_param = ""
-    
+
     if page is not None and limit is not None:
         url_param = f"?page={page}&limit={limit}"
 
@@ -46,7 +46,7 @@ def shopware_request(
             url_param = f"{url_param}&{additions}"
         else:
             url_param = f"?{additions}"
-    
+
     url = f"{base_url}{endpoint}{url_param}"
 
     try:
@@ -88,7 +88,11 @@ def shopware_request(
 
     response_data = response.json()
 
-    return response_data["data"], response_data["total"]
+    try:
+        return response_data["data"], response_data["total"]
+
+    except KeyError:
+        return response_data["data"]
 
 
 def inventree_request(
@@ -102,12 +106,12 @@ def inventree_request(
 ):
     load_dotenv()
     base_url = os.getenv("INVENTREE_URL")
-    
+
     try:
         # Token bei jedem Request neu einlesen
         with open("auth.json", "r") as f:
             auth_data = json.load(f)
-                
+
         access_token = auth_data["inventree_token"]
 
         auth_headers = {
@@ -115,13 +119,13 @@ def inventree_request(
             "Authorization": f"Token {access_token}",
             "Content-Type": "application/json",
         }
-            
+
     except Exception as e:
         logging.error(f"Failed to load auth data: {e}")
         return None
-    
+
     url_param = ""
-    
+
     if page is not None and limit is not None:
         url_param = f"?page={page}&limit={limit}"
 
@@ -132,7 +136,7 @@ def inventree_request(
             url_param = f"?{additions}"
 
     url = f"{base_url}{endpoint}{url_param}"
-    
+
     try:
         if method == "get":
             if data is not None:
@@ -150,6 +154,14 @@ def inventree_request(
             else:
                 response = requests.post(url, headers=auth_headers, timeout=timeout)
 
+        elif method == "delete":
+            if data is not None:
+                response = requests.delete(
+                    url, headers=auth_headers, json=data, timeout=timeout
+                )
+            else:
+                response = requests.delete(url, headers=auth_headers, timeout=timeout)
+
         else:
             logging.error(f"Invalid method: {method}")
             return None
@@ -165,11 +177,11 @@ def inventree_request(
         logging.error(f"Error: {e}")
         return None
 
-    if response.status_code != 200 and response.status_code != 201:
+    if response.status_code != 200 and response.status_code != 201 and response.status_code != 204:
         logging.error(f"Request failed with status code {response.status_code}")
         logging.error(f"Details: {response.text}")
         if data is not None:
             logging.error(f"Data: {data}")
         return None
-    
+
     return response.json()

@@ -15,9 +15,11 @@ def update_orders():
     
     update_orders_shopware()
     sync_orders_inventree()
+    update_order_status()
     
     logging.info("Bestellungen Update abgeschlossen")
 
+# Adds Orders to the database
 def update_orders_shopware():
     conn, cursor = get_db()
 
@@ -124,8 +126,78 @@ def update_orders_shopware():
             # Todo: Update existing orders
     
     logging.info(f"{counter_new} neue Bestellungen hinzugefügt, insgesamt {orders_total} Bestellungen Verarbeitet")
-    
 
+# Updates the status of the orders
+def update_order_status():
+    conn, cursor = get_db()
+    
+    cursor.execute("""SELECT inventree_id, shopware_id, inventree_state FROM orders WHERE state != 'Abgeschlossen'""")
+    orders = cursor.fetchall()
+    
+    for order in orders:
+        
+        response = shopware_request("get", f"/api/order/{order[1]}", additions="associations[stateMachineState][]")
+        
+        state = response["stateMachineState"]["name"]
+        
+        response = inventree_request("get", f"/api/order/so/{order[0]}/")
+        
+        state_inventree = response["status_text"]
+        
+        if state == "In Bearbeitung" and state_inventree == "Pending":
+            response = inventree_request("post", f"/api/order/so/{order[0]}/issue/")
+            
+            if response is not None:
+                cursor.execute("""UPDATE orders SET inventree_state = 'In Progress' WHERE shopware_id = ?""", (order[1],))
+                conn.commit()
+                continue
+            else:
+                continue
+        
+        elif state == "offen":
+            cursor.execute("""UPDATE orders SET inventree_state = 'Pending' WHERE shopware_id = ?""", (order[1],))
+            continue
+            
+        elif state == "Abgeschlossen" and state_inventree == "In Progress":
+            response = inventree_request("post", f"/api/order/so/{order[0]}/complete/")
+
+            if response is not None:
+                cursor.execute(
+                    """UPDATE orders SET inventree_state = 'Complete' WHERE shopware_id = ?""",
+                    (order[1],),
+                )
+                conn.commit()
+                continue
+            else:
+                logging.warning(f"Bestellung {order[1]} wurde in Shopware als abgeschlossen markiert, konnte aber nicht in Inventree abgeschlossen werden, bitte manuell überprüfen")
+                
+        elif state == "Abgeschlossen" and state_inventree == "Pending":
+            response = inventree_request("post", f"/api/order/so/{order[0]}/issue/")
+
+            if response is not None:
+                cursor.execute(
+                    """UPDATE orders SET inventree_state = 'In Progress' WHERE shopware_id = ?""",
+                    (order[1],),
+                )
+                conn.commit()
+                response = inventree_request("post", f"/api/order/so/{order[0]}/complete/")
+                
+                if response is not None:
+                    cursor.execute(
+                        """UPDATE orders SET inventree_state = 'Complete' WHERE shopware_id = ?""",
+                        (order[1],),
+                    )
+                    conn.commit()
+                    continue
+                else:
+                    logging.warning(f"Bestellung {order[1]} wurde in Shopware als abgeschlossen markiert, konnte aber nicht in Inventree abgeschlossen werden, bitte manuell überprüfen")
+            else:
+                continue
+        
+        else:
+            logging.error(f"Unerwartete Bestellstatus Kombination: Shopware: {state}, Inventree: {state_inventree}")
+    
+# Synchronizes the orders with Inventree
 def sync_orders_inventree():
     conn, cursor = get_db()
     
@@ -210,15 +282,11 @@ def sync_orders_inventree():
                     "sale_price_currency": "EUR",
                 }
             
-            logging.debug(f"Füge Produkt {inventree_product_id} zur Bestellung {order_id} hinzu")
             response = inventree_request("post", "/api/order/so-line/", data=data)
             
             product_counter += 1
             
-            logging.debug(f"suche nach Lagerbestand für Produkt {inventree_product_id}")
             stock = inventree_request("get", "/api/stock/", additions=f"available=true&part={inventree_product_id}")
-                        
-            logging.debug(f"Stock: {stock}")
             
             try:
                 if stock is None:
@@ -239,8 +307,6 @@ def sync_orders_inventree():
                     "stock_item": stock[0]["pk"],
                 }
             }
-            
-            logging.debug(f"Setze Lagerbestand für Produkt {inventree_product_id} auf {stock[0]['quantity'] - quantity}")
             response = inventree_request("POST", "/api/order/so-line/", data=data)
         
         counter += 1

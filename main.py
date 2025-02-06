@@ -9,6 +9,7 @@ from addresses import update_addresses
 from log_config import setup_logging
 from orders import update_orders
 from products import update_products
+from clean import clean
 
 logging = setup_logging()
 
@@ -28,4 +29,5 @@ if __name__ == "__main__":
     #update_customers()
     #update_addresses()
     #update_products()
-    update_orders()     # This function is not threaded because it depends on the customers and addresses tables
+    #update_orders()     # This function is not threaded because it depends on the customers and addresses tables
+    clean()

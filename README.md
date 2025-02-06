@@ -28,6 +28,6 @@ INVENTREE_PASSWORD=GHI789
 
 [X] Bestellungs Syncronisation
 
-[ ] Bestellungs Status updaten
+[X] Bestellungs Status updaten
 
-[ ] Löschen von Nutzerdaten, wenn nicht mehr in Shopware
+[X] Löschen von Nutzerdaten, wenn nicht mehr in Shopware
