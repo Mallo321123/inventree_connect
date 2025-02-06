@@ -19,6 +19,7 @@ def clean():
                 """DELETE FROM addresses WHERE customer_id = ?""", (customer[0],)
             )
             cursor.execute("""DELETE FROM customers WHERE id = ?""", (customer[0],))
+            continue
         
         response = inventree_request("delete", f"/api/company/{customer[1]}/")
         response = "OK"

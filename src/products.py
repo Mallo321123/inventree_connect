@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import os
 import requests
 import json
@@ -21,7 +20,6 @@ def update_products():
 
 # updates product db from shopware
 def update_products_shopware():
-    load_dotenv()
     base_url = os.getenv("SHOPWARE_URL")
 
     limit = 50
@@ -188,7 +186,6 @@ def update_products_shopware():
 
 
 def valid_shopware_product():
-    load_dotenv()
     base_url = os.getenv("SHOPWARE_URL")
 
     conn, cursor = get_db()
@@ -263,7 +260,7 @@ def valid_shopware_product():
 
 
 def sync_inventree():
-    load_dotenv()
+
     base_url = os.getenv("INVENTREE_URL")
 
     def request(data):

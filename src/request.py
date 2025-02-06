@@ -1,5 +1,4 @@
 import requests
-from dotenv import load_dotenv
 import os
 from typing import Optional, Any
 from log_config import setup_logging
@@ -17,7 +16,6 @@ def shopware_request(
     additions: Optional[str] = None,
     timeout: Optional[int] = 10,
 ):
-    load_dotenv()
     base_url = os.getenv("SHOPWARE_URL")
 
     try:
@@ -104,7 +102,6 @@ def inventree_request(
     additions: Optional[str] = None,
     timeout: Optional[int] = 10,
 ):
-    load_dotenv()
     base_url = os.getenv("INVENTREE_URL")
 
     try:
@@ -183,5 +180,5 @@ def inventree_request(
         if data is not None:
             logging.error(f"Data: {data}")
         return None
-
+    
     return response.json()

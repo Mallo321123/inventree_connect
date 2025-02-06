@@ -1,33 +1,23 @@
-# Configuration
+# Configuraton
 
-configuration is done using a .env file (for now)
-
-env eample:
+docker compose example File:
 
 ```
-SHOPWARE_URL=https://shop.domain.com
-INVENTREE_URL=https://inventree.domain.com
+services:
+  sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./logs:/app/logs
+      - ./db:/app/db
+    environment:
+      - SLEEP_TIME=5 
+      - SHOPWARE_URL=https://shop.url.com
+      - INVENTREE_URL=https://inventree.url.com
+      - SHOPWARE_ACCESS_KEY=Access_key
+      - SHOPWARE_SECRET_KEY=Secret_key
+      - INVENTREE_USER=shop
+      - INVENTREE_PASSWORD=passwd123
 
-SHOPWARE_ACCESS_KEY=ABC123
-SHOPWARE_SECRET_KEY=DEF456
-
-INVENTREE_USER=shopUser
-INVENTREE_PASSWORD=GHI789
 ```
-
-
-# Todo
-
-[X] Nutzer Syncronisation
-
-[X] Mit "Dopelten" Nutzer Konten umgehen können
-
-[X] Produkt Syncronisation
-
-[X] Adressen Syncronisation
-
-[X] Bestellungs Syncronisation
-
-[X] Bestellungs Status updaten
-
-[X] Löschen von Nutzerdaten, wenn nicht mehr in Shopware

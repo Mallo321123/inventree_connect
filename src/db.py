@@ -7,7 +7,7 @@ logging = setup_logging()
 
 # Function to get the database connection/cursor
 def get_db():
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("db/database.db")
     return conn, conn.cursor()
 
 
@@ -52,7 +52,7 @@ def create_tables():
             shippment_number TEXT,
             state TEXT,
             products TEXT,
-            inventree_state TEXT,
+            inventree_state TEXT
         )
     """)
 
@@ -66,7 +66,7 @@ def create_tables():
             name TEXT,
             description TEXT,
             active BOOLEAN,
-            productNumber TEXT,
+            productNumber TEXT
         )
     """)
 

@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 import os
 import requests
 import datetime
@@ -12,8 +11,6 @@ logging = setup_logging()
 
 # Authenticates against Shopware and saves the token in a file
 def shopware_auth():
-    load_dotenv()
-
     base_url = os.getenv("SHOPWARE_URL")
     access_key = os.getenv("SHOPWARE_ACCESS_KEY")
     secret_key = os.getenv("SHOPWARE_SECRET_KEY")
@@ -77,8 +74,6 @@ def shopware_auth():
 
 # Authenticates against Inventree and saves the token in a file
 def inventree_auth():
-    load_dotenv()
-
     base_url = os.getenv("INVENTREE_URL")
     username = os.getenv("INVENTREE_USER")
     password = os.getenv("INVENTREE_PASSWORD")
