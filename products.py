@@ -11,8 +11,12 @@ logging = setup_logging()
 
 
 def update_products():
+    logging.info("Starte Produkt Update")
+    
     update_products_shopware()
     sync_inventree()
+    
+    logging.info("Produkt Update abgeschlossen")
 
 
 # updates product db from shopware

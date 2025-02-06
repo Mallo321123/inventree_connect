@@ -1,19 +1,14 @@
-import requests
-import json
-import os
-from dotenv import load_dotenv
-
 from db import get_db, close_db
-
+from request import inventree_request, shopware_request
 from log_config import setup_logging
 
 logging = setup_logging()
 
 
 def update_customers():
-    logging.info("Updating customers in db")
+    logging.info("Updating customers")
+    
     update_customers_shopware()
-
     sync_inventree()
 
     logging.info("Customers updated")
@@ -21,10 +16,6 @@ def update_customers():
 
 # Check if customers in db are still in Shopware, and update them if needed
 def update_customers_shopware():
-    load_dotenv()
-
-    base_url = os.getenv("SHOPWARE_URL")
-
     limit = 500
     page = 1
     counter = 0
@@ -33,48 +24,6 @@ def update_customers_shopware():
 
     logging.info("Updating customer db from Shopware")
 
-    def request(page, limit):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["shopware_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/customer?limit={limit}&page={page}",
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen der Shopware Kunden: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return
-
-            customers_data = response.json()
-
-            return customers_data["data"], customers_data["total"]
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen der Shopware Kunden liste")
-            return
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen der Shopware Kunden: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
     conn, cursor = get_db()
 
     # Reset all updated flags
@@ -82,7 +31,9 @@ def update_customers_shopware():
     conn.commit()
 
     while True:
-        customers_data, data_count = request(page, limit)  # Request a page of customers
+        customers_data, data_count = shopware_request(
+            "get", "/api/customer", page=page, limit=limit
+        )  # Request a page of customers
 
         if customers_data is None:
             break
@@ -90,45 +41,34 @@ def update_customers_shopware():
         for customer in customers_data:  # For each customer in the page
             cursor.execute(
                 """
-                           SELECT * FROM customers WHERE shopware_id = ?
+                           SELECT id FROM customers WHERE shopware_id = ?
                            """,
                 (customer["id"],),
             )  # Check if the customer is in the database
 
             result = cursor.fetchone()
 
+            data = {
+                "shopware_id": customer["id"],
+                "is_in_shopware": True,
+                "firstName": customer["firstName"],
+                "lastName": customer["lastName"],
+                "email": customer["email"],
+                "updated": True,
+            }
+
             if result is None:
-                cursor.execute(
-                    """
-                                 INSERT INTO customers (shopware_id, is_in_shopware, firstName, lastName, email, updated)
-                                 VALUES (?, ?, ?, ?, ?, ?)
-                                 """,
-                    (
-                        customer["id"],
-                        True,
-                        customer["firstName"],
-                        customer["lastName"],
-                        customer["email"],
-                        True,
-                    ),
-                )
+                id = create_customer_db(data)
+
+                if id is None:
+                    logging.error(f"Failed to create customer {customer['id']} in db")
+                    continue
+
                 counter_new += 1
 
             else:
-                cursor.execute(
-                    """
-                               UPDATE customers SET is_in_shopware = ?, updated = ?, firstName = ?, lastName = ?, email = ?
-                               WHERE shopware_id = ?
-                               """,
-                    (
-                        True,
-                        True,
-                        customer["firstName"],
-                        customer["lastName"],
-                        customer["email"],
-                        customer["id"],
-                    ),
-                )
+                data["id"] = result[0]
+                update_customer_db(data)
                 counter_updated += 1
 
             counter += 1
@@ -155,117 +95,85 @@ def update_customers_shopware():
 
 # Sync customers from db to Inventree
 def sync_inventree():
-    load_dotenv()
-
-    base_url = os.getenv("INVENTREE_URL")
-
     counter = 0
-
-    def request(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/company/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(f"fehler beim erstellen dieses kunden: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
 
     conn, cursor = get_db()
 
     cursor.execute(
-        "SELECT firstName, lastName, email, id FROM customers WHERE is_in_inventree = 0 OR is_in_inventree IS NULL"
+        "SELECT id FROM customers WHERE (is_in_inventree = 0 OR is_in_inventree IS NULL) AND is_in_shopware = 1"
     )
 
-    customers = cursor.fetchall()
+    ids = cursor.fetchall()
 
-    for customer in customers:
-        if customer[0] is None or customer[1] is None or customer[2] is None:
-            continue
-
-        data = {
-            "is_customer": True,
-            "name": customer[0] + " " + customer[1],
-            "description": "",
-            "website": "",
-            "currency": "EUR",
-            "phone": "",
-            "email": customer[2],
-            "is_supplier": False,
-            "is_manufacturer": False,
-            "active": True,
-        }
-
-        response = request(data)
-
-        if response is None:
-            logging.error(
-                f"Kunde {customer[0]} {customer[1]} konnte nicht in Inventree erstellt werden"
-            )
-            continue
-
-        cursor.execute(
-            "UPDATE customers SET inventree_id = ?, is_in_inventree = ? WHERE id = ?",
-            (response["pk"], True, customer[3]),
-        )
-
-        conn.commit()
-        counter += 1
+    for id in ids:
+        response = create_customer_inventree(id[0])
+        
+        if response is not None:
+            counter += 1
 
     logging.info(f"{counter} Kunden erfolgreich in Inventree erstellt")
     close_db(conn)
 
 
+# Create a new customer in the database
 def create_customer_db(data):
     conn, cursor = get_db()
 
-    cursor.execute(
-        """
-        INSERT INTO customers (inventree_id, shopware_id, is_in_inventree, is_in_shopware, firstName, lastName, email)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-        """,
-        (
-            data["inventree_id"],
-            data["shopware_id"],
-            bool(data["is_in_inventree"]),
-            bool(data["is_in_shopware"]),
-            data["firstName"],
-            data["lastName"],
-            data["email"],
-        ),
-    )
+    original_lastName = data["lastName"]
+    counter = 1
 
+    # Check for existing combinations
+    while True:
+        cursor.execute("""
+            SELECT id FROM customers 
+            WHERE firstName = ? AND lastName = ? AND email = ?
+        """, (data["firstName"], data["lastName"], data["email"]))
+        
+        if not cursor.fetchone():
+            break
+            
+        data["lastName"] = f"{original_lastName} ({counter})"
+        counter += 1
+
+    # Lists to store fields and values
+    fields = []
+    values = []
+
+    # List of all possible fields
+    possible_fields = [
+        "inventree_id",
+        "shopware_id",
+        "is_in_inventree",
+        "is_in_shopware",
+        "firstName", 
+        "lastName",
+        "email",
+        "updated",
+    ]
+
+    # Add only fields that exist in data
+    for field in possible_fields:
+        if field in data:
+            fields.append(field)
+            # Convert boolean fields
+            if field in ["is_in_inventree", "is_in_shopware"]:
+                values.append(bool(data[field]))
+            else:
+                values.append(data[field])
+
+    if not fields:
+        logging.warning("No fields provided for create_customer_db")
+        return None
+
+    # Construct and execute query
+    placeholders = ",".join(["?" for _ in fields])
+    query = f"""
+        INSERT INTO customers ({",".join(fields)})
+        VALUES ({placeholders})
+        RETURNING id
+    """
+
+    cursor.execute(query, values)
     id = cursor.fetchone()[0]
     conn.commit()
     close_db(conn)
@@ -273,50 +181,57 @@ def create_customer_db(data):
     return id
 
 
+# Update a customer in the database
+def update_customer_db(data):
+    if "id" not in data:
+        logging.error("No id provided for update_customer_db")
+        return
+
+    conn, cursor = get_db()
+
+    # Build dynamic UPDATE query
+    fields = []
+    values = []
+
+    # List of all possible fields
+    possible_fields = [
+        "inventree_id",
+        "shopware_id",
+        "is_in_inventree",
+        "is_in_shopware",
+        "firstName",
+        "lastName",
+        "email",
+        "updated",
+    ]
+
+    # Add only fields that exist in data
+    for field in possible_fields:
+        if field in data:
+            fields.append(f"{field} = ?")
+            # Convert boolean fields
+            if field in ["is_in_inventree", "is_in_shopware"]:
+                values.append(bool(data[field]))
+            else:
+                values.append(data[field])
+
+    if not fields:
+        logging.warning("No fields to update")
+        return
+
+    # Add id to values
+    values.append(data["id"])
+
+    # Construct and execute query
+    query = f"UPDATE customers SET {', '.join(fields)} WHERE id = ?"
+    cursor.execute(query, values)
+
+    conn.commit()
+    close_db(conn)
+
+
+# creates a customer in Inventree with the given id
 def create_customer_inventree(id):
-    load_dotenv()
-    base_url = os.getenv("INVENTREE_URL")
-
-    def request(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/company/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(f"fehler beim erstellen dieses kunden: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
     conn, cursor = get_db()
 
     cursor.execute(
@@ -337,7 +252,8 @@ def create_customer_inventree(id):
         "active": True,
     }
 
-    response = request(data)
+    response = inventree_request("post", "/api/company/", data=data)
+    
     try:
         customer_id = response["pk"]
     except TypeError:

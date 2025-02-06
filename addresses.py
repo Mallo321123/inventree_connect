@@ -1,8 +1,4 @@
-from dotenv import load_dotenv
-import os
-import requests
-import json
-
+from request import shopware_request, inventree_request
 from db import get_db, close_db
 from log_config import setup_logging
 
@@ -12,16 +8,14 @@ logging = setup_logging()
 def update_addresses():
     logging.info("Starte Adressen Update")
 
-    #update_addresses_shopware()
-    sync_inventree()
+    update_addresses_shopware()  # Update the addresse from Shopware
+    sync_inventree()  # Sync the addresses to Inventree
 
     logging.info("Adressen Update abgeschlossen")
 
 
+# Updates the addresses from Shopware
 def update_addresses_shopware():
-    load_dotenv()
-    base_url = os.getenv("SHOPWARE_URL")
-
     limit = 500
     page = 1
     counter_addr = 0
@@ -29,57 +23,19 @@ def update_addresses_shopware():
 
     logging.info("Updating customer address db from Shopware")
 
-    def request(page, limit):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["shopware_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/customer?limit={limit}&page={page}&associations[addresses][]",
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen der Shopware Kunden: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return
-
-            customers_data = response.json()
-
-            return customers_data["data"], customers_data["total"]
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen der Shopware Kunden liste")
-            return
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen der Shopware Kunden: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
     conn, cursor = get_db()
-    
+
     # Reset all updated flags
     cursor.execute("UPDATE addresses SET updated = 0")
     conn.commit()
 
     while True:
-        customers_data, data_count = request(
-            page, limit
+        customers_data, data_count = shopware_request(
+            "get",
+            "/api/customer",
+            page=page,
+            limit=limit,
+            additions="associations[addresses][]",
         )  # Request a page of customer informations containing addresses
 
         if customers_data is None:
@@ -106,7 +62,7 @@ def update_addresses_shopware():
             for address in addresses:  # For each address of the customer
                 cursor.execute(
                     """
-                    SELECT * FROM addresses WHERE shopware_id = ?
+                    SELECT id FROM addresses WHERE shopware_id = ?
                     """,
                     (address["id"],),
                 )
@@ -115,43 +71,26 @@ def update_addresses_shopware():
                     cursor.fetchone()
                 )  # Check if the address is already in the database
 
+                data = {
+                    "shopware_id": address["id"],
+                    "is_in_shopware": 1,
+                    "customer_id": customer_id,
+                    "firstName": address["firstName"],
+                    "lastName": address["lastName"],
+                    "zipcode": address["zipcode"],
+                    "city": address["city"],
+                    "street": address["street"],
+                    "updated": True,
+                }
+
                 if (
                     address_exists is None
                 ):  # When the address is not in the database, insert it
-                    cursor.execute(
-                        """
-                                 INSERT INTO addresses (
-                                    shopware_id,
-                                    is_in_shopware,
-                                    customer_id,
-                                    firstName,
-                                    lastName,
-                                    zipcode,
-                                    city,
-                                    street,
-                                    updated
-                                    ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            address["id"],
-                            customer_id,
-                            address["firstName"],
-                            address["lastName"],
-                            address["zipcode"],
-                            address["city"],
-                            address["street"],
-                            True,  # Mark the address as updated
-                        ),
-                    )
+                    create_address_db(data)
 
-                else:  # When the address is already in the database, mark as updated
-                    cursor.execute(
-                        """
-                                   UPDATE addresses SET
-                                   updated = ?
-                                   WHERE shopware_id = ?
-                                   """,
-                        (True, address["id"]),
-                    )
+                else:  # When the address is already in the database, update it
+                    data["id"] = address_exists[0]
+                    update_address_db(data)
 
                 counter_addr += 1
 
@@ -163,7 +102,7 @@ def update_addresses_shopware():
             break
 
         page += 1
-    
+
     # Set all addresses that are not updated to not in shopware
     cursor.execute("""
         UPDATE addresses SET is_in_shopware = 0 
@@ -177,218 +116,199 @@ def update_addresses_shopware():
     )
 
 
+# Syncs the addresses to Inventree
 def sync_inventree():
-    load_dotenv()
-    base_url = os.getenv("INVENTREE_URL")
-
-    def request(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/company/address/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(f"fehler beim erstellen dieser Adresse: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-
     conn, cursor = get_db()
 
     cursor.execute(
-        "SELECT id, customer_id, firstName, lastName, zipcode, city, street FROM addresses WHERE is_in_inventree = 0 OR inventree_id IS NULL"
+        "SELECT id FROM addresses WHERE (is_in_inventree = 0 OR inventree_id IS NULL) AND is_in_shopware = 1"
     )
 
-    addresses = cursor.fetchall()
+    ids = cursor.fetchall()
 
     counter = 0
 
-    for address in addresses:
-        cursor.execute(
-            """
-                       SELECT inventree_id FROM customers WHERE id = ?
-                          """,
-            (address[1],),
-        )
+    for id in ids:
+        address_id = create_address_inventree(id[0])
 
-        customer_id = cursor.fetchone()[0]
-
-        if customer_id is None:
-            cursor.execute("""SELECT * FROM customers WHERE id = ?""", (address[1],))
-            
-            customer = cursor.fetchone()
-            
-            if customer is None:
-                logging.error(f"Kunde {address[1]} nicht in der Datenbank gefunden")
-                
-            else:
-                logging.warning(f"Kunde {customer[1]} Existiert nicht in Inventree, aber in der Datenbank")
-            
-            continue
-
-        data = {
-            "company": customer_id,
-            "title": address[0],
-            "line1": (address[2] + " " + address[3])[:50],
-            "line2": address[6][:50],
-            "postal_code": address[4][:10],
-            "postal_city": address[5],
-        }
-
-        response = request(data)
-
-        try:
-            cursor.execute(
-                """
-                        UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
-                            """,
-                (response["pk"], address[0]),
-            )
-        except TypeError:
-            logging.error(f"Adresse {address[0]} konnte nicht in Inventree erstellt werden")
-            continue
-
-        conn.commit()
-
-        counter += 1
+        if address_id is not None:
+            counter += 1
 
     logging.info(f"{counter} Adressen wurden hinzugefügt")
     close_db(conn)
 
 
+# Creates an address in the database with the given values
 def create_address_db(data):
     conn, cursor = get_db()
 
-    cursor.execute(
-        """
-        INSERT INTO addresses (inventree_id, shopware_id, is_in_inventree, is_in_shopware, customer_id, firstName, lastName, zipcode, city, street)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    # Lists to store fields and values
+    fields = []
+    values = []
+
+    # List of all possible fields
+    possible_fields = [
+        "inventree_id",
+        "shopware_id",
+        "is_in_inventree",
+        "is_in_shopware",
+        "customer_id",
+        "firstName",
+        "lastName",
+        "zipcode",
+        "city",
+        "street",
+        "updated",
+    ]
+
+    # Add only fields that exist in data
+    for field in possible_fields:
+        if field in data:
+            fields.append(field)
+            # Convert boolean fields
+            if field in ["is_in_inventree", "is_in_shopware"]:
+                values.append(bool(data[field]))
+            else:
+                values.append(data[field])
+
+    if not fields:
+        logging.warning("No fields provided for create_address_db")
+        return None
+
+    # Construct and execute query
+    placeholders = ",".join(["?" for _ in fields])
+    query = f"""
+        INSERT INTO addresses ({",".join(fields)})
+        VALUES ({placeholders})
         RETURNING id
-        """,
-        (
-            data["inventree_id"],
-            data["shopware_id"],
-            bool(data["is_in_inventree"]),
-            bool(data["is_in_shopware"]),
-            data["customer_id"],
-            data["firstName"],
-            data["lastName"],
-            data["zipcode"],
-            data["city"],
-            data["street"],
-        ),
-    )
-    
+    """
+
+    cursor.execute(query, values)
     id = cursor.fetchone()[0]
     conn.commit()
+    close_db(conn)
 
     return id
 
+
+# Updates an address in the database with the given values
+def update_address_db(data):
+    if "id" not in data:
+        logging.error("No id provided for update_address_db")
+        return
+
+    conn, cursor = get_db()
+
+    # Build dynamic UPDATE query
+    fields = []
+    values = []
+
+    # List of all possible fields
+    possible_fields = [
+        "inventree_id",
+        "shopware_id",
+        "is_in_inventree",
+        "is_in_shopware",
+        "customer_id",
+        "firstName",
+        "lastName",
+        "zipcode",
+        "city",
+        "street",
+        "updated",
+    ]
+
+    # Add only fields that exist in data
+    for field in possible_fields:
+        if field in data:
+            fields.append(f"{field} = ?")
+            # Convert boolean fields
+            if field in ["is_in_inventree", "is_in_shopware"]:
+                values.append(bool(data[field]))
+            else:
+                values.append(data[field])
+
+    if not fields:
+        logging.warning("No fields to update")
+        return
+
+    # Add id to values
+    values.append(data["id"])
+
+    # Construct and execute query
+    query = f"UPDATE addresses SET {', '.join(fields)} WHERE id = ?"
+    cursor.execute(query, values)
+
+    conn.commit()
+    close_db(conn)
+
+
+# Creates the address in Inventree with the given id
 def create_address_inventree(id):
-    load_dotenv()
-    base_url = os.getenv("INVENTREE_URL")    
+    conn, cursor = get_db()
+
+    cursor.execute(
+        """ SELECT id, customer_id, firstName, lastName, zipcode, city, street FROM addresses WHERE id = ?""",
+        (id,),
+    )  #
+    address = cursor.fetchone()
+
+    cursor.execute(
+        """ SELECT inventree_id FROM customers WHERE id = ?""", (address[1],)
+    )
+    customer_id = cursor.fetchone()
     
+    if customer_id is None:     # When the customer is not in Inventree, or does not exist
+        cursor.execute("""SELECT id FROM customers WHERE id = ?""", (address[1],))
 
-    def request(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
+        customer = cursor.fetchone()
 
-            access_token = auth_data["inventree_token"]
+        if customer is None:
+            logging.error(f"Kunde {address[1]} nicht in der Datenbank gefunden")
+            
+            cursor.execute("""DELETE FROM addresses WHERE customer_id = ?""", (address[1],))
+            conn.commit()
 
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/company/address/",
-                json=data,
-                timeout=10,
-                headers=headers,
+        else:
+            logging.warning(
+                f"Kunde {customer[0]} Existiert nicht in Inventree, aber in der Datenbank"
             )
 
-            if response.status_code != 201:
-                logging.error(f"fehler beim erstellen dieser Adresse: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
+        return None
 
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-        
-    conn, cursor = get_db()
-    
-    cursor.execute(""" SELECT id, customer_id, firstName, lastName, zipcode, city, street FROM addresses WHERE id = ?""", (id,))#
-    address = cursor.fetchone()
-    
-    cursor.execute(""" SELECT inventree_id FROM customers WHERE id = ?""", (address[1],))
-    customer_id = cursor.fetchone()[0]
+    if address[4] is None:
+        postal_code = ""
+    else:
+        postal_code = address[4][:10]
     
     data = {
-        "company": customer_id,
+        "company": customer_id[0],
         "title": address[0],
         "line1": (address[2] + " " + address[3])[:50],
         "line2": address[6][:50],
-        "postal_code": address[4][:10],
+        "postal_code": postal_code,
         "postal_city": address[5],
     }
-    
-    response = request(data)
-    
-    try: 
+
+    response = inventree_request("post", "/api/company/address/", data=data)
+
+    try:
         address_id = response["pk"]
     except TypeError:
         return None
     
-    cursor.execute(
-        """
-        UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
-        """,
-        (address_id, id)
-    )
-    
+    try:
+        cursor.execute(
+            """
+            UPDATE addresses SET is_in_inventree = 1, inventree_id = ? WHERE id = ?
+            """,
+            (address_id, id),
+        )
+    except Exception as e:
+        logging.error(f"konnte nicht in Inventree erstellt werden: {e}")
+        return None
+
     conn.commit()
     close_db(conn)
-    
+
     return address_id

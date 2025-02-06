@@ -20,10 +20,14 @@ INVENTREE_PASSWORD=GHI789
 
 [X] Nutzer Syncronisation
 
+[X] Mit "Dopelten" Nutzer Konten umgehen können
+
 [X] Produkt Syncronisation
 
-[ ] Adressen Syncronisation
+[X] Adressen Syncronisation
 
-[ ] Bestellungs Syncronisation
+[X] Bestellungs Syncronisation
+
+[ ] Bestellungs Status updaten
 
 [ ] Löschen von Nutzerdaten, wenn nicht mehr in Shopware

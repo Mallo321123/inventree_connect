@@ -1,80 +1,41 @@
-import requests
 import json
-import os
-from dotenv import load_dotenv
 
 from db import get_db, close_db
 from customers import create_customer_db, create_customer_inventree
 from log_config import setup_logging
 from addresses import create_address_db, create_address_inventree
-from datetime import datetime
+
+from request import shopware_request, inventree_request
 
 logging = setup_logging()
 
 
 def update_orders():
-    #update_orders_shopware()
+    logging.info("Starte Bestellungen Update")
+    
+    update_orders_shopware()
     sync_orders_inventree()
+    
+    logging.info("Bestellungen Update abgeschlossen")
 
 def update_orders_shopware():
-    load_dotenv()
-    base_url = os.getenv("SHOPWARE_URL")
-
-    def request(limit = 10):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["shopware_token"]
-
-            auth_headers = {
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-
-            response = requests.get(
-                f"{base_url}/api/order?sort=-orderDateTime&limit={limit}&associations[addresses][]&associations[lineItems][]&associations[orderCustomer][]",  # Limit direkt in der Query
-                headers=auth_headers,
-                timeout=10,  # 10 Sekunden Timeout
-            )
-
-            if response.status_code != 200:
-                logging.error(
-                    f"Fehler beim Abrufen der Shopware Bestellungen: {response.status_code}"
-                )
-                logging.error(f"Fehlerdetails: {response.text}")
-                return
-
-            orders_data = response.json()
-            return orders_data["data"], orders_data["total"]
-
-        except requests.exceptions.Timeout:
-            logging.error("Timeout beim Abrufen der Shopware Bestellungen")
-            return
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Fehler beim Abrufen der Shopware Bestellungen: {e}")
-            logging.error(f"Fehlerdetails: {str(e)}")
-            return
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-        
     conn, cursor = get_db()
 
     order_count = 10    # Anzahl der Bestellungen, die rückläufig abgerufen werden sollen
     
-    orders, orders_total = request(order_count)
+    orders, orders_total = shopware_request(
+        "get",
+        "/api/order",
+        page=1,
+        limit=order_count,
+        additions="sort=-orderDateTime&associations[addresses][]&associations[lineItems][]&associations[orderCustomer][]",
+    )
 
     counter_new = 0
     product_counter = 0
     
     for order in orders:
         cursor.execute("""SELECT id FROM orders WHERE shopware_id = ?""", (order["id"],))
-        
-        with open("order.json", "w") as f:
-            json.dump(order, f)
         
         if cursor.fetchone() is None:   # When order is not in database
             try:
@@ -106,7 +67,11 @@ def update_orders_shopware():
                     """SELECT id FROM products WHERE shopware_id = ?""",
                     (item["productId"],),
                 )
-                product_id = cursor.fetchone()[0]
+                try:
+                    product_id = cursor.fetchone()[0]
+                except TypeError:
+                    logging.warning(f"Produkt {item['productId']} nicht in Datenbank gefunden")
+                    continue
                 quantity = item["quantity"]
 
                 item = {
@@ -122,10 +87,8 @@ def update_orders_shopware():
             except TypeError:
                 logging.warning(f"Adresse {order['addresses'][0]['id']} nicht in Datenbank gefunden")
                 data = {
-                    "inventree_id": None,
                     "shopware_id": order["addresses"][0]["id"],
                     "is_in_shopware": True,
-                    "is_in_inventree": None,
                     "customer_id": customer_id,
                     "firstName": order["addresses"][0]["firstName"],
                     "lastName": order["addresses"][0]["lastName"],
@@ -164,172 +127,6 @@ def update_orders_shopware():
     
 
 def sync_orders_inventree():
-    load_dotenv()
-    base_url = os.getenv("INVENTREE_URL")
-    
-    def create(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/order/so/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(f"fehler beim erstellen dieser Bestellung: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-    
-    def add_product(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/order/so-line/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(f"fehler beim hinzufügen von Produkten zu einer Bestellung: {data}")
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-    
-    def get_stock(id):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.get(
-                f"{base_url}/api/stock/?available=true&part={id}&limit=10",
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(
-                    f"fehler beim abrufen des Lagerbestandes: {data}"
-                )
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"GET failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-    
-    def alocate_stock(data):
-        try:
-            # Token bei jedem Request neu einlesen
-            with open("auth.json", "r") as f:
-                auth_data = json.load(f)
-
-            access_token = auth_data["inventree_token"]
-
-            headers = {
-                "Accept": "application/json",
-                "Authorization": f"Token {access_token}",
-                "Content-Type": "application/json",
-            }
-
-            response = requests.post(
-                f"{base_url}/api/order/so-line/",
-                json=data,
-                timeout=10,
-                headers=headers,
-            )
-
-            if response.status_code != 201:
-                logging.error(
-                    f"fehler beim hinzufügen von stock zu einer Bestellung: {data}"
-                )
-                logging.error(f"Error response body: {response.text}")
-                return
-
-            return response.json()
-
-        except requests.exceptions.Timeout:
-            logging.error("Request timed out after 10 seconds")
-            return None
-
-        except requests.exceptions.RequestException as e:
-            logging.error(f"POST failed: {e}")
-            logging.error(f"Error details: {str(e)}")
-            return None
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            return None
-    
     conn, cursor = get_db()
     
     cursor.execute("""SELECT shopware_order_number, creation_date, customer_id, products, address_id, id FROM orders WHERE is_in_inventree = 0 OR is_in_inventree IS NULL""")
@@ -343,28 +140,35 @@ def sync_orders_inventree():
         
         creation_date = order[1].split("T")[0]
         
-        cursor.execute("""SELECT inventree_id FROM addresses WHERE id = ?""", (order[4],))
-        address_id = cursor.fetchone()[0]    
-        
-        cursor.execute("""SELECT inventree_id FROM customers WHERE id = ?""", (order[2],))
-        customer_id = cursor.fetchone()[0]
-        
-        if customer_id is None:
+        try:
+            cursor.execute(
+                """SELECT inventree_id FROM customers WHERE id = ?""", (order[2],)
+            )
+            customer_id = cursor.fetchone()[0]
+            if customer_id is None:
+                raise TypeError
+        except TypeError:
             logging.warning(f"Kunde {order[2]} ist noch nicht in Inventree")
             customer_id = create_customer_inventree(order[2])
-            
+
             if customer_id is None:
-                logging.error(f"Kunde {order[2]} konnte nicht in Inventree erstellt werden")
+                logging.error(
+                    f"Kunde {order[2]} konnte nicht in Inventree erstellt werden"
+                )
                 continue
-            
-        if address_id is None:
+        
+        try:
+            cursor.execute("""SELECT inventree_id FROM addresses WHERE id = ?""", (order[4],))
+            address_id = cursor.fetchone()[0] 
+            if address_id is None:
+                raise TypeError
+        except TypeError:
             logging.warning(f"Adresse {order[4]} ist noch nicht in Inventree")
             address_id = create_address_inventree(order[4])
             
             if address_id is None:
                 logging.error(f"Adresse {order[4]} konnte nicht in Inventree erstellt werden")
                 continue
-        
         
         reference = f"SO-{''.join(filter(str.isdigit, order[0]))}"
         
@@ -377,7 +181,7 @@ def sync_orders_inventree():
             "order_currency": "EUR",
         }
         
-        response = create(data)
+        response = inventree_request("post", "/api/order/so/", data=data)
         
         try:
             order_id = response["pk"]
@@ -405,30 +209,39 @@ def sync_orders_inventree():
                     "quantity": quantity,
                     "sale_price_currency": "EUR",
                 }
-                
-            respone = add_product(data)
+            
+            logging.debug(f"Füge Produkt {inventree_product_id} zur Bestellung {order_id} hinzu")
+            response = inventree_request("post", "/api/order/so-line/", data=data)
             
             product_counter += 1
             
-            stock = get_stock(inventree_product_id)
+            logging.debug(f"suche nach Lagerbestand für Produkt {inventree_product_id}")
+            stock = inventree_request("get", "/api/stock/", additions=f"available=true&part={inventree_product_id}")
+                        
+            logging.debug(f"Stock: {stock}")
             
-            if stock is None:
+            try:
+                if stock is None:
+                    logging.warning(f"Kein Lagerbestand für Produkt {inventree_product_id} gefunden")
+                    continue
+                
+                if stock[0]["quantity"] < quantity:
+                    logging.warning(f"Produkt {inventree_product_id} nicht genügend Lagerbestand")
+                    continue
+            except IndexError:
                 logging.warning(f"Kein Lagerbestand für Produkt {inventree_product_id} gefunden")
-                continue
-            
-            if stock[0]["quantity"] < quantity:
-                logging.warning(f"Produkt {inventree_product_id} nicht genügend Lagerbestand")
                 continue
             
             data = {
                 0: {
-                    "line_item": respone["pk"],
+                    "line_item": response["pk"],
                     "quantity": quantity,
                     "stock_item": stock[0]["pk"],
                 }
             }
             
-            response = alocate_stock(data)
+            logging.debug(f"Setze Lagerbestand für Produkt {inventree_product_id} auf {stock[0]['quantity'] - quantity}")
+            response = inventree_request("POST", "/api/order/so-line/", data=data)
         
         counter += 1
     

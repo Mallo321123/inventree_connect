@@ -25,14 +25,7 @@ if __name__ == "__main__":
     auth_thread = threading.Thread(target=auth_job)
     auth_thread.start()
     
-    customers_thread = threading.Thread(target=update_customers)
-    address_thread = threading.Thread(target=update_addresses)
-    
-    #customers_thread.start()
-    #address_thread.start()
-    
-    #customers_thread.join()
-    
-    update_orders()
-    
+    #update_customers()
+    #update_addresses()
     #update_products()
+    update_orders()     # This function is not threaded because it depends on the customers and addresses tables
