@@ -120,6 +120,14 @@ def update_orders_shopware():
                         f"Produkt {item['productId']} nicht in Datenbank gefunden"
                     )
                     continue
+                
+                cursor.execute("""SELECT multiplicator, offset FROM modifier WHERE product_id = ?""", (product_id,))
+                
+                try:
+                    modifier = cursor.fetchone()
+                    item["quantity"] = item["quantity"] * modifier[0] + modifier[1]
+                except TypeError:
+                    pass
 
                 cursor.execute(
                     """INSERT INTO order_position (product_id, order_id, count) VALUES (?, ?, ?)""",
