@@ -9,9 +9,7 @@ docker compose example File:
 ```
 services:
   sync:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/mallo321123/inventree_connect:latest
     volumes:
       - ./logs:/app/logs
       - ./db:/app/db
