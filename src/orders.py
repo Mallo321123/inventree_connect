@@ -128,6 +128,17 @@ def update_orders_shopware():
                     item["quantity"] = item["quantity"] * modifier[0] + modifier[1]
                 except TypeError:
                     pass
+                
+                cursor.execute("""  SELECT p.inventree_id
+                                    FROM overwrites o
+                                    JOIN products p ON o.overwrite_with = p.id
+                                    WHERE o.item = ?
+                                    """, (product_id,))     # Check if product is overwritten
+                
+                try:
+                    product_id = cursor.fetchone()[0]
+                except TypeError:
+                    pass
 
                 cursor.execute(
                     """INSERT INTO order_position (product_id, order_id, count) VALUES (?, ?, ?)""",
