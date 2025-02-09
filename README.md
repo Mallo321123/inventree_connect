@@ -1,3 +1,7 @@
+# Introduction
+
+This Project is made for syncing Orders from a Shopware Instance to a Inventree Instance.
+
 # Configuraton
 
 docker compose example File:
