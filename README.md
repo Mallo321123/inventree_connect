@@ -14,7 +14,7 @@ services:
       - ./logs:/app/logs
       - ./db:/app/db
     environment:
-      - SLEEP_TIME=5 
+      - SLEEP_TIME=240
       - SHOPWARE_URL=https://shop.url.com
       - INVENTREE_URL=https://inventree.url.com
       - SHOPWARE_ACCESS_KEY=Access_key
