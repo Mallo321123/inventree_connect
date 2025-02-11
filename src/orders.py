@@ -15,7 +15,7 @@ def update_orders():
 
     update_orders_shopware()
     sync_orders_inventree()
-    # update_order_status()
+    update_order_status()
 
     logging.info("Bestellungen Update abgeschlossen")
 
@@ -231,10 +231,26 @@ def update_order_status():
                     conn.commit()
                     continue
                 else:
-                    logging.warning(
-                        f"Bestellung {order[1]} konnte nicht in Inventree abgeschlossen werden, bitte manuell überprüfen"
-                    )
-                    continue
+                    shipment_id = inventree_request("get", "/api/order/so/shipment/", additions=f"order={order[0]}", page=1, limit=10)
+                    
+                    try:
+                        shipment_id = shipment_id["results"][0]["pk"]
+                    except KeyError:
+                        logging.error(f"Keine offene Lieferung für Bestellung {order[0]} gefunden")
+                        continue
+                    
+                    response = inventree_request("post", f"/api/order/so/shipment/{shipment_id}/ship/")
+                    
+                    if response is not None:
+                        cursor.execute(
+                            """UPDATE orders SET inventree_state = 'Complete' WHERE shopware_id = ?""",
+                            (order[1],),
+                        )
+                        conn.commit()
+                        continue
+                    else:
+                        logging.error(f"Bestellung {order[0]} konnte nicht abgeschlossen werden, bitte manuell prüfen")
+                        continue
             else:
                 logging.error(
                     f"Unerwarteter Bestellstatus, Inventree: {state_inventree}"
