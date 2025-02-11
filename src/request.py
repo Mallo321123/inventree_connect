@@ -83,6 +83,10 @@ def shopware_request(
         logging.error(f"Request failed with status code {response.status_code}")
         logging.error(f"Details: {response.text}")
         return None
+    
+    if response.status_code == 502:
+        logging.warning("Received 502 error, retrying request")
+        return shopware_request(method, endpoint, data, page, limit, additions, timeout)
 
     response_data = response.json()
 
@@ -180,5 +184,9 @@ def inventree_request(
         if data is not None:
             logging.error(f"Data: {data}")
         return None
+    
+    if response.status_code == 502:
+        logging.warning("Received 502 error, retrying request")
+        return inventree_request(method, endpoint, data, page, limit, additions, timeout)
     
     return response.json()
