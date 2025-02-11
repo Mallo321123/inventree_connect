@@ -15,7 +15,7 @@ def update_orders():
 
     update_orders_shopware()
     sync_orders_inventree()
-    update_order_status()
+    # update_order_status()
 
     logging.info("Bestellungen Update abgeschlossen")
 
@@ -120,21 +120,27 @@ def update_orders_shopware():
                         f"Produkt {item['productId']} nicht in Datenbank gefunden"
                     )
                     continue
-                
-                cursor.execute("""SELECT multiplicator, offset FROM modifier WHERE product_id = ?""", (product_id,))
-                
+
+                cursor.execute(
+                    """SELECT multiplicator, offset FROM modifier WHERE product_id = ?""",
+                    (product_id,),
+                )
+
                 try:
                     modifier = cursor.fetchone()
                     item["quantity"] = item["quantity"] * modifier[0] + modifier[1]
                 except TypeError:
                     pass
-                
-                cursor.execute("""  SELECT p.inventree_id
+
+                cursor.execute(
+                    """  SELECT p.inventree_id
                                     FROM overwrites o
                                     JOIN products p ON o.overwrite_with = p.id
                                     WHERE o.item = ?
-                                    """, (product_id,))     # Check if product is overwritten
-                
+                                    """,
+                    (product_id,),
+                )  # Check if product is overwritten
+
                 try:
                     product_id = cursor.fetchone()[0]
                 except TypeError:
@@ -162,7 +168,7 @@ def update_orders_shopware():
 
 # Updates the status of the orders
 def update_order_status():
-    def interpret_state(state):     # Interpretes the state of an order into a number
+    def interpret_state(state):  # Interpretes the state of an order into a number
         if state == "Pending" or state == "Offen":
             return 1
         elif state == "In Progress" or state == "In Bearbeitung":
@@ -174,7 +180,7 @@ def update_order_status():
         else:
             logging.error(f"Unerwarteter Bestellstatus: {state}")
             return None
-    
+
     conn, cursor = get_db()
 
     cursor.execute(
@@ -192,10 +198,10 @@ def update_order_status():
 
         response = inventree_request("get", f"/api/order/so/{order[0]}/")
         state_inventree = response["status_text"]
-        
+
         state_inventree = interpret_state(state_inventree)
         state_shopware = interpret_state(state_shopware)
-        
+
         if state_shopware == state_inventree:
             continue
         elif state_shopware > state_inventree:
@@ -211,9 +217,11 @@ def update_order_status():
                     continue
                 else:
                     continue
-            
+
             elif state_inventree == 2:
-                response = inventree_request("post", f"/api/order/so/{order[0]}/complete/")
+                response = inventree_request(
+                    "post", f"/api/order/so/{order[0]}/complete/"
+                )
 
                 if response is not None:
                     cursor.execute(
@@ -335,7 +343,7 @@ def sync_orders_inventree():
             conn.commit()
         else:
             continue
-        
+
         products = json.loads(order[7])
 
         for product_item in products:  # Add the products to the order
@@ -354,7 +362,28 @@ def sync_orders_inventree():
             )  # Add product to order
 
             product_counter += 1
+            
+            order_items_id = inventree_request("get", "/api/order/so-line/", additions=f"order={order_inventree_id}", page=1, limit=100)
+            
+            try:
+                order_items_id = order_items_id["results"][0]
+            except KeyError:
+                logging.warning(f"Keine Bestellpositionen für Bestellung {order_inventree_id} gefunden")
+                continue
+            
+            order_item_id = None
+            try:
+                for item in order_items_id:
+                    if item['part'] == part:
+                        order_item_id = item['pk']
+                        break
+            except TypeError:
+                order_item_id = order_items_id['pk']
 
+            if order_item_id is None:
+                logging.warning(f"Keine Bestellposition für Teil {part} gefunden")
+                continue
+            
             stock = inventree_request(
                 "get",
                 "/api/stock/",
@@ -373,15 +402,35 @@ def sync_orders_inventree():
                 logging.warning(f"Kein Lagerbestand für Produkt {part} gefunden")
                 continue
 
+            shipment = inventree_request(
+                "get",
+                "/api/order/so/shipment/",
+                additions=f"shiped=false&order={order_inventree_id}",
+                page=1,
+                limit=10,
+            )  # Search for open shipment
+
+            try:
+                shipment_id = shipment["results"][0]["pk"]
+            except KeyError:
+                logging.error(
+                    f"Keine offene Lieferung für Bestellung {order_inventree_id} gefunden, bitte manuell prüfen"
+                )
+                continue
+
             data = {
-                0: {
-                    "line_item": part,
-                    "quantity": quantity,
-                    "stock_item": stock[0]["pk"],
-                }
+                "items": [
+                    {
+                        "line_item": order_item_id,
+                        "quantity": quantity,
+                        "stock_item": stock[0]["pk"],
+                    }
+                ],
+                "shipment": shipment_id,
             }
+
             response = inventree_request(
-                "post", "/api/order/so-line/", data=data
+                "post", f"/api/order/so/{order_inventree_id}/allocate/", data=data
             )  # Alocate stock to order
 
         counter += 1
