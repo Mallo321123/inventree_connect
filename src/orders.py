@@ -167,9 +167,9 @@ def update_order_status():
             return 1
         elif state == "In Progress" or state == "In Bearbeitung":
             return 2
-        elif state == "completed" or state == "Abgeschlossen":
+        elif state == "Complete" or state == "Abgeschlossen":
             return 3
-        elif state == "cancelled" or state == "Abgebrochen":
+        elif state == "Cancelled" or state == "Abgebrochen":
             return 4
         else:
             logging.error(f"Unerwarteter Bestellstatus: {state}")
