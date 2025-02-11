@@ -133,7 +133,7 @@ def update_orders_shopware():
                     pass
 
                 cursor.execute(
-                    """  SELECT p.inventree_id
+                    """  SELECT p.id
                                     FROM overwrites o
                                     JOIN products p ON o.overwrite_with = p.id
                                     WHERE o.item = ?
