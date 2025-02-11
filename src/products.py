@@ -311,6 +311,17 @@ def sync_inventree():
     products = cursor.fetchall()
 
     for product in products:
+        
+        cursor.execute("""SELECT id FROM overwrites WHERE item = ?""", (product[3],))
+        overwrite = cursor.fetchone()
+        
+        if overwrite is not None:
+            cursor.execute("""UPDATE products 
+                              SET is_in_inventree = 1
+                              WHERE id = ?""", (product[3],))
+            conn.commit()
+            continue
+        
         # Sanitize description by removing problematic characters
         if product[1]:
             product_desc = (
