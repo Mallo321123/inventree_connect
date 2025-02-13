@@ -231,6 +231,18 @@ def update_order_status():
                     conn.commit()
                     continue
                 else:
+                    order_info = inventree_request("get", f"/api/order/so/{order[0]}/")
+                    
+                    try:
+                        items = order_info["line_items"]
+                        done_items = order_info["completed_lines"]
+                    except KeyError:
+                        continue
+                    
+                    if items != done_items:
+                        logging.debug(f"Bestellung {order[0]} noch nicht vollständig abgeschlossen")
+                        continue
+                    
                     shipment_id = inventree_request("get", "/api/order/so/shipment/", additions=f"order={order[0]}", page=1, limit=10)
                     
                     try:
