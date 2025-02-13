@@ -24,14 +24,14 @@ def update_orders():
 def update_orders_shopware():
     conn, cursor = get_db()
 
-    order_count = 10  # Anzahl der Bestellungen, die rückläufig abgerufen werden sollen
+    order_count = 50  # Anzahl der Bestellungen, die rückläufig abgerufen werden sollen
 
     orders, orders_total = shopware_request(
         "get",
         "/api/order",
         page=1,
         limit=order_count,
-        additions="sort=-orderDateTime&associations[addresses][]&associations[lineItems][]&associations[orderCustomer][]",
+        additions="sort=-orderDateTime&associations[addresses][]&associations[lineItems][]&associations[orderCustomer][]&associations[deliveries][]",
     )
 
     counter_new = 0
@@ -107,6 +107,22 @@ def update_orders_shopware():
             )
 
             order_id = cursor.fetchone()[0]
+
+            if order["deliveries"] is not None:
+                cursor.execute(
+                    """UPDATE orders SET
+                               shippment_number = ?,
+                               shipping_date = ?,
+                               shipped = ?
+                               WHERE id = ?""",
+                    (
+                        str(order["deliveries"][0]["trackingCodes"]),
+                        order["deliveries"][0]["shippingDateEarliest"],
+                        bool(order["deliveries"][0]["trackingCodes"]),
+                        order_id,
+                    ),
+                )
+                conn.commit()
 
             for item in order["lineItems"]:
                 cursor.execute(
@@ -184,15 +200,18 @@ def update_order_status():
     conn, cursor = get_db()
 
     cursor.execute(
-        """SELECT inventree_id, shopware_id, inventree_state FROM orders WHERE state != 'Abgeschlossen'"""
+        """SELECT inventree_id, shopware_id, inventree_state FROM orders WHERE state != 'Abgeschlossen' OR inventree_state IS NULL OR inventree_state != 'Complete'"""
     )
     orders = cursor.fetchall()
 
     for order in orders:
+        if order[0] is None:
+            continue
+
         response = shopware_request(
             "get",
             f"/api/order/{order[1]}",
-            additions="associations[stateMachineState][]",
+            additions="associations[stateMachineState][]&associations[deliveries][]",
         )
         state_shopware = response["stateMachineState"]["name"]
 
@@ -219,6 +238,24 @@ def update_order_status():
                     continue
 
             elif state_inventree == 2:
+                try:
+                    cursor.execute(
+                        """UPDATE orders SET
+                                shippment_number = ?
+                                shipping_date = ?
+                                shipped = ? 
+                                WHERE shopware_id = ?""",
+                        (
+                            response["deliveries"][0]["trackingCodes"],
+                            response["deliveries"][0]["shippingDateEarliest"],
+                            bool(response["deliveries"][0]["trackingCodes"]),
+                            order[1],
+                        ),
+                    )
+                    conn.commit()
+                except KeyError:
+                    pass
+
                 response = inventree_request(
                     "post", f"/api/order/so/{order[0]}/complete/"
                 )
@@ -232,27 +269,39 @@ def update_order_status():
                     continue
                 else:
                     order_info = inventree_request("get", f"/api/order/so/{order[0]}/")
-                    
+
                     try:
                         items = order_info["line_items"]
                         done_items = order_info["completed_lines"]
                     except KeyError:
                         continue
-                    
+
                     if items != done_items:
-                        logging.debug(f"Bestellung {order[0]} noch nicht vollständig abgeschlossen")
+                        logging.debug(
+                            f"Bestellung {order[0]} noch nicht vollständig abgeschlossen"
+                        )
                         continue
-                    
-                    shipment_id = inventree_request("get", "/api/order/so/shipment/", additions=f"order={order[0]}", page=1, limit=10)
-                    
+
+                    shipment_id = inventree_request(
+                        "get",
+                        "/api/order/so/shipment/",
+                        additions=f"order={order[0]}",
+                        page=1,
+                        limit=10,
+                    )
+
                     try:
                         shipment_id = shipment_id["results"][0]["pk"]
                     except KeyError:
-                        logging.error(f"Keine offene Lieferung für Bestellung {order[0]} gefunden")
+                        logging.error(
+                            f"Keine offene Lieferung für Bestellung {order[0]} gefunden"
+                        )
                         continue
-                    
-                    response = inventree_request("post", f"/api/order/so/shipment/{shipment_id}/ship/")
-                    
+
+                    response = inventree_request(
+                        "post", f"/api/order/so/shipment/{shipment_id}/ship/"
+                    )
+
                     if response is not None:
                         cursor.execute(
                             """UPDATE orders SET inventree_state = 'Complete' WHERE shopware_id = ?""",
@@ -261,7 +310,9 @@ def update_order_status():
                         conn.commit()
                         continue
                     else:
-                        logging.error(f"Bestellung {order[0]} konnte nicht abgeschlossen werden, bitte manuell prüfen")
+                        logging.error(
+                            f"Bestellung {order[0]} konnte nicht abgeschlossen werden, bitte manuell prüfen"
+                        )
                         continue
             else:
                 logging.error(
@@ -390,28 +441,36 @@ def sync_orders_inventree():
             )  # Add product to order
 
             product_counter += 1
-            
-            order_items_id = inventree_request("get", "/api/order/so-line/", additions=f"order={order_inventree_id}", page=1, limit=100)
-            
+
+            order_items_id = inventree_request(
+                "get",
+                "/api/order/so-line/",
+                additions=f"order={order_inventree_id}",
+                page=1,
+                limit=100,
+            )
+
             try:
                 order_items_id = order_items_id["results"][0]
             except KeyError:
-                logging.warning(f"Keine Bestellpositionen für Bestellung {order_inventree_id} gefunden")
+                logging.warning(
+                    f"Keine Bestellpositionen für Bestellung {order_inventree_id} gefunden"
+                )
                 continue
-            
+
             order_item_id = None
             try:
                 for item in order_items_id:
-                    if item['part'] == part:
-                        order_item_id = item['pk']
+                    if item["part"] == part:
+                        order_item_id = item["pk"]
                         break
             except TypeError:
-                order_item_id = order_items_id['pk']
+                order_item_id = order_items_id["pk"]
 
             if order_item_id is None:
                 logging.warning(f"Keine Bestellposition für Teil {part} gefunden")
                 continue
-            
+
             stock = inventree_request(
                 "get",
                 "/api/stock/",
